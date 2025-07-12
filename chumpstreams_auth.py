@@ -1,180 +1,187 @@
 """
 ChumpStreams Authentication Manager
 
-Version: 2.0.3
+Version: 1.5.0
 Author: covchump
-Last updated: 2025-05-26 14:29:37
+Last updated: 2025-01-12 14:46:00
 
-Handles authentication for ChumpStreams
+Manages authentication for ChumpStreams
 """
-import logging
 import json
-import base64
 import os
+import logging
 from PyQt5.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger('chumpstreams')
 
 class AuthenticationManager(QObject):
-    """Manages authentication and credential persistence"""
+    """Manages authentication state and credentials"""
     
     # Signals
     login_succeeded = pyqtSignal(str)  # username
-    login_failed = pyqtSignal(str)     # error message
+    login_failed = pyqtSignal(str)  # error message
     
-    def __init__(self, api_client, config_file):
+    def __init__(self, api, config_file):
+        """Initialize authentication manager"""
         super().__init__()
-        self.api = api_client
+        self.api = api
         self.config_file = config_file
         self.auth = {}
-        self.saved_credentials = None
+        self.saved_credentials = {}
+        self.current_service = None
     
-    def login(self, username, password, remember):
-        """Handle login request"""
+    def login(self, username, password, remember=False, service=None):
+        """Attempt to login"""
         try:
-            # Call API login
+            # Update API with service configuration if provided
+            if service:
+                self.current_service = service
+                self.api.base_url = self._build_base_url(service)
+                logger.info(f"Using service: {service['name']} at {self.api.base_url}")
+            
+            # Login using API
             result = self.api.login(username, password)
             
-            if isinstance(result, dict) and 'user_info' in result:
-                # Store auth
-                self.auth = {'username': username, 'password': password}
+            if result:
+                # Store auth info
+                self.auth = {
+                    'username': username,
+                    'password': password,
+                    'user_info': result.get('user_info', {}),
+                    'service': self.current_service
+                }
                 
-                # Save config if remember is checked
+                # Save credentials if requested
                 if remember:
-                    self._save_credentials()
+                    self.save_credentials(username, password, self.current_service)
+                else:
+                    # Clear saved credentials for this service
+                    self.clear_saved_credentials(self.current_service)
                 
-                # Emit signal
+                # Emit success signal
                 self.login_succeeded.emit(username)
-                return True
             else:
-                # Login failed
+                # Emit failure signal
                 self.login_failed.emit("Invalid username or password")
-                return False
         except Exception as e:
             logger.error(f"Login error: {str(e)}")
-            self.login_failed.emit(str(e))
-            return False
+            self.login_failed.emit(f"Login error: {str(e)}")
+    
+    def _build_base_url(self, service):
+        """Build base URL from service configuration"""
+        protocol = 'https' if service.get('use_https', True) else 'http'
+        port = '443' if service.get('use_https', True) else '80'
+        url = service.get('url', 'subs.chumpbumptv.com')
+        return f"{protocol}://{url}:{port}"
     
     def logout(self):
-        """Handle logout request"""
+        """Logout and clear authentication"""
         self.api.logout()
         self.auth = {}
-        self.saved_credentials = None
-        
-        # Delete the config file
-        try:
-            if os.path.exists(self.config_file):
-                os.remove(self.config_file)
-                logger.info(f"Config file deleted during logout: {self.config_file}")
-            else:
-                logger.info(f"No config file to delete: {self.config_file}")
-        except Exception as e:
-            logger.error(f"Error deleting config file during logout: {str(e)}")
-            
-        # Clear the log file contents but keep the file
-        try:
-            # Determine the path to the log file (in the same directory as the config file)
-            cfg_dir = os.path.dirname(self.config_file)
-            log_file = os.path.join(cfg_dir, "chumpstreams.log")
-            
-            if os.path.exists(log_file):
-                # We can safely truncate the file without disturbing logging
-                # by opening it in "w" mode (which truncates) then immediately closing it
-                with open(log_file, 'w') as f:
-                    # Write a new header line
-                    f.write(f"Log file cleared during logout on {os.path.basename(self.config_file)}\n")
-                
-                logger.info("Log file contents cleared during logout")
-            else:
-                logger.info(f"No log file to clear: {log_file}")
-        except Exception as e:
-            logger.error(f"Error clearing log file during logout: {str(e)}")
-        
-        return True
+        logger.info("User logged out")
     
     def get_auth(self):
-        """Get current authentication details"""
+        """Get current authentication info"""
         return self.auth
     
-    def has_saved_credentials(self):
-        """Check if there are saved credentials"""
-        return (self.saved_credentials is not None and 
-                isinstance(self.saved_credentials, dict) and
-                self.saved_credentials.get('username') and 
-                self.saved_credentials.get('password'))
+    def is_logged_in(self):
+        """Check if user is logged in"""
+        return bool(self.auth)
     
-    def get_saved_credentials(self):
-        """Get saved credentials"""
-        return self.saved_credentials
+    def save_credentials(self, username, password, service=None):
+        """Save credentials to config file"""
+        try:
+            # Load existing config
+            config = {}
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+            
+            # Update credentials section
+            if 'credentials' not in config:
+                config['credentials'] = {}
+            
+            # Service key for storing credentials
+            service_key = service['name'] if service else 'default'
+            
+            config['credentials'][service_key] = {
+                'username': username,
+                'password': password,
+                'service': service
+            }
+            
+            # Also store last used service
+            config['last_service'] = service_key
+            
+            # Save config
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+                
+            logger.info(f"Saved credentials for {username} on {service_key}")
+        except Exception as e:
+            logger.error(f"Error saving credentials: {str(e)}")
     
     def load_saved_credentials(self):
         """Load saved credentials from config file"""
         try:
             if not os.path.exists(self.config_file):
-                return False
+                return
                 
             with open(self.config_file, 'r') as f:
                 config = json.load(f)
-                
-            # Load saved credentials
-            if config.get('save', 0) == 1:
-                username = config.get('username', '')
-                # Also load the password if available
-                password = config.get('password', '')
-                if password:
-                    # Decode the obfuscated password
-                    try:
-                        password = base64.b64decode(password.encode('utf-8')).decode('utf-8')
-                    except Exception as e:
-                        password = ''
-                        logger.warning(f"Could not decode saved password: {str(e)}")
-                
-                # Store credentials for auto-login
-                if username and password:
-                    self.saved_credentials = {
-                        'username': username,
-                        'password': password
-                    }
-                    return True
+            
+            # Get last used service
+            last_service = config.get('last_service', 'default')
+            
+            # Load credentials for last service
+            if 'credentials' in config and last_service in config['credentials']:
+                creds = config['credentials'][last_service]
+                self.saved_credentials = {
+                    'username': creds.get('username', ''),
+                    'password': creds.get('password', ''),
+                    'service': creds.get('service', None),
+                    'service_name': last_service
+                }
+                logger.info(f"Loaded saved credentials for {self.saved_credentials['username']} on {last_service}")
         except Exception as e:
-            logger.error(f"Error loading saved credentials: {str(e)}")
-        
-        return False
+            logger.error(f"Error loading credentials: {str(e)}")
     
-    def _save_credentials(self, clear=False):
-        """Save credentials to config file"""
+    def get_saved_credentials(self):
+        """Get saved credentials"""
+        return self.saved_credentials
+    
+    def has_saved_credentials(self):
+        """Check if there are saved credentials"""
+        return bool(self.saved_credentials)
+    
+    def clear_saved_credentials(self, service=None):
+        """Clear saved credentials"""
         try:
-            # Get username and remember state
-            username = ""
-            password = ""
-            save = 0
-            
-            if self.auth and not clear:
-                username = self.auth.get('username', '')
-                save = 1
-                # Save password if remember is enabled
-                if save == 1:
-                    # Simple obfuscation - not true encryption but better than plaintext
-                    password_bytes = self.auth.get('password', '').encode('utf-8')
-                    password = base64.b64encode(password_bytes).decode('utf-8')
-            
-            # Load existing config to preserve other settings
-            existing_config = {}
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    existing_config = json.load(f)
-            
-            # Update credential fields
-            existing_config['username'] = username
-            existing_config['password'] = password
-            existing_config['save'] = save
-            
-            # Save back to file
-            with open(self.config_file, 'w') as f:
-                json.dump(existing_config, f)
+            if not os.path.exists(self.config_file):
+                return
                 
-            logger.info("Credentials saved successfully")
-            return True
+            with open(self.config_file, 'r') as f:
+                config = json.load(f)
+            
+            if 'credentials' in config:
+                if service:
+                    # Clear specific service
+                    service_key = service['name'] if isinstance(service, dict) else service
+                    if service_key in config['credentials']:
+                        del config['credentials'][service_key]
+                else:
+                    # Clear all credentials
+                    config['credentials'] = {}
+            
+            # Save config
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+                
+            # Clear in-memory credentials
+            if not service or (service and self.saved_credentials.get('service_name') == (service['name'] if isinstance(service, dict) else service)):
+                self.saved_credentials = {}
+                
+            logger.info("Cleared saved credentials")
         except Exception as e:
-            logger.error(f"Error saving credentials: {str(e)}")
-            return False
+            logger.error(f"Error clearing credentials: {str(e)}")

@@ -1,9 +1,9 @@
 """
 ChumpStreams API Client
 
-Version: 1.9.0
+Version: 1.9.5
 Author: covchump
-Last updated: 2025-05-23 12:10:35
+Last updated: 2025-01-12 14:22:00
 
 Client for interacting with IPTV service APIs
 """
@@ -109,6 +109,19 @@ class ApiClient:
         except Exception as e:
             logger.error(f"Failed to get categories for {content_type}: {str(e)}")
             return []
+    
+    # Add convenience methods that accept optional arguments for compatibility
+    def get_live_categories(self, *args, **kwargs):
+        """Get live TV categories"""
+        return self.get_categories('live')
+    
+    def get_vod_categories(self, *args, **kwargs):
+        """Get VOD categories"""
+        return self.get_categories('vod')
+    
+    def get_series_categories(self, *args, **kwargs):
+        """Get series categories"""
+        return self.get_categories('series')
     
     def get_live_streams(self, category_id=None):
         """Get live TV streams"""
@@ -246,32 +259,70 @@ class ApiClient:
         ext = extension or "mp4"
         return f"{self.base_url}/series/{self.username}/{self.password}/{stream_id}.{ext}"
     
-    def search(self, query, content_type):
-        """Search for content by name"""
+    def search(self, query, content_type=None):
+        """Search for content by name with enhanced logging"""
         if not self.logged_in or not query:
+            logger.warning(f"Search skipped - logged_in: {self.logged_in}, query: '{query}'")
             return []
         
         query = query.lower()
         results = []
+        logger.info(f"Starting search for '{query}' in content_type: {content_type}")
         
-        if content_type == 'live':
-            streams = self.get_live_streams()
-            for stream in streams:
-                if query in stream.get('name', '').lower():
-                    results.append(stream)
+        # If no content type specified, search all
+        if content_type is None:
+            content_types = ['live', 'vod', 'series']
+        else:
+            content_types = [content_type]
         
-        elif content_type == 'vod':
-            streams = self.get_vod_streams()
-            for stream in streams:
-                if query in stream.get('name', '').lower():
-                    results.append(stream)
+        for ctype in content_types:
+            try:
+                logger.info(f"Searching {ctype} content...")
+                
+                if ctype == 'live':
+                    streams = self.get_live_streams()
+                    logger.info(f"Retrieved {len(streams) if streams else 0} live streams")
+                    
+                    if streams:
+                        for stream in streams:
+                            name = stream.get('name', '').lower()
+                            if query in name:
+                                stream['content_type'] = 'live'
+                                results.append(stream)
+                                logger.debug(f"Found match: {stream.get('name')}")
+                
+                elif ctype == 'vod':
+                    streams = self.get_vod_streams()
+                    logger.info(f"Retrieved {len(streams) if streams else 0} VOD streams")
+                    
+                    if streams:
+                        for stream in streams:
+                            # Search in both name and title fields
+                            name = stream.get('name', '').lower()
+                            title = stream.get('title', '').lower()
+                            if query in name or query in title:
+                                stream['content_type'] = 'vod'
+                                results.append(stream)
+                                logger.debug(f"Found match: {stream.get('name') or stream.get('title')}")
+                
+                elif ctype == 'series':
+                    series_list = self.get_series()
+                    logger.info(f"Retrieved {len(series_list) if series_list else 0} series")
+                    
+                    if series_list:
+                        for series in series_list:
+                            # Search in both name and title fields
+                            name = series.get('name', '').lower()
+                            title = series.get('title', '').lower()
+                            if query in name or query in title:
+                                series['content_type'] = 'series'
+                                results.append(series)
+                                logger.debug(f"Found match: {series.get('name') or series.get('title')}")
+                        
+            except Exception as e:
+                logger.error(f"Error searching {ctype}: {str(e)}", exc_info=True)
         
-        elif content_type == 'series':
-            series_list = self.get_series()
-            for series in series_list:
-                if query in series.get('name', '').lower():
-                    results.append(series)
-        
+        logger.info(f"Search for '{query}' completed with {len(results)} total results")
         return results
     
     def _wait_for_rate_limit(self):

@@ -1,9 +1,9 @@
 """
 ChumpStreams Search Functionality
 
-Version: 1.8.6
+Version: 1.8.8
 Author: covchump
-Last updated: 2025-05-19 17:59:34
+Last updated: 2025-01-12 14:12:08
 
 Implements search features for ChumpStreams
 """
@@ -37,18 +37,24 @@ class SearchWorker(QRunnable):
             total_types = len(self.content_types)
             
             for i, content_type in enumerate(self.content_types):
-                self.signals.progress.emit(i, total_types)
+                self.signals.progress.emit(i + 1, total_types)
                 
-                # Get content categories
-                categories = self._get_categories(content_type)
-                
-                # Search in each category
-                for category in categories:
-                    category_results = self._search_category(content_type, category)
-                    all_results.extend(category_results)
+                # Use the API's search method directly
+                try:
+                    results = self.api.search(self.search_term, content_type)
+                    
+                    # Add content type to each result
+                    for item in results:
+                        item['content_type'] = content_type
+                        all_results.append(item)
+                        
+                    logger.info(f"Found {len(results)} {content_type} results for '{self.search_term}'")
+                    
+                except Exception as e:
+                    logger.error(f"Error searching {content_type}: {str(e)}")
             
-            # Emit the final progress update
-            self.signals.progress.emit(total_types, total_types)
+            # Log total results
+            logger.info(f"Total search results: {len(all_results)} for '{self.search_term}'")
             
             # Emit results
             self.signals.finished.emit(all_results, self.search_term)
@@ -56,56 +62,6 @@ class SearchWorker(QRunnable):
         except Exception as e:
             logger.error(f"Search error: {str(e)}")
             self.signals.error.emit(str(e))
-    
-    def _get_categories(self, content_type):
-        """Get content categories for the given content type"""
-        try:
-            if content_type == 'live':
-                return self.api.get_live_categories(self.auth)
-            elif content_type == 'vod':
-                return self.api.get_vod_categories(self.auth)
-            elif content_type == 'series':
-                return self.api.get_series_categories(self.auth)
-            return []
-        except Exception as e:
-            logger.error(f"Error getting {content_type} categories: {str(e)}")
-            return []
-    
-    def _search_category(self, content_type, category):
-        """Search for content in a specific category"""
-        results = []
-        category_id = category['category_id']
-        category_name = category['category_name']
-        
-        try:
-            # Get all content for this category
-            if content_type == 'live':
-                items = self.api.get_live_streams(self.auth, category_id)
-            elif content_type == 'vod':
-                items = self.api.get_vod_streams(self.auth, category_id)
-            elif content_type == 'series':
-                items = self.api.get_series(self.auth, category_id)
-            else:
-                items = []
-                
-            # Filter items by search term
-            search_term_lower = self.search_term.lower()
-            for item in items:
-                # Get item name
-                name = self._get_item_name(item).lower()
-                
-                # If search term is in name, add to results
-                if search_term_lower in name:
-                    # Add type and category info to item
-                    item['content_type'] = content_type
-                    item['category_name'] = category_name
-                    results.append(item)
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error searching {content_type} category {category_name}: {str(e)}")
-            return []
     
     def _get_item_name(self, item):
         """Extract name from item"""

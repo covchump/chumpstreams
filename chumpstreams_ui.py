@@ -1,11 +1,11 @@
 """
 ChumpStreams UI Components
 
-Version: 2.0.3
+Version: 2.0.6
 Author: covchump
-Last updated: 2025-05-24 07:54:53
+Last updated: 2025-01-12 14:56:00
 
-Main UI components for ChumpStreams application
+Main UI components for ChumpStreams application with service selection
 """
 import os
 import sys
@@ -13,9 +13,11 @@ from PyQt5.QtWidgets import (
     QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
     QSplitter, QLabel, QRadioButton, QButtonGroup,
     QPushButton, QLineEdit, QDialog, QCheckBox,
-    QProgressBar, QMenu, QAction, QStatusBar, QMessageBox
+    QProgressBar, QMenu, QAction, QStatusBar, QMessageBox,
+    QComboBox, QInputDialog
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QDateTime
+from PyQt5.QtGui import QIcon
 
 # Import panel components from the UI Manager module
 from chumpstreams_ui_manager import (
@@ -23,10 +25,12 @@ from chumpstreams_ui_manager import (
 )
 
 class ContentTypeBar(QWidget):
-    """Content type selection bar"""
+    """Content type selection bar with search functionality"""
     
     # Signal for content type changes
     content_type_changed = pyqtSignal(str)
+    # Signal for search requests
+    search_requested = pyqtSignal(str)
     
     def __init__(self, parent=None):
         """Initialize content type bar"""
@@ -65,14 +69,75 @@ class ContentTypeBar(QWidget):
         self.content_type_group.addButton(self.favorites_button)
         layout.addWidget(self.favorites_button)
         
+        # Add spacer
+        layout.addStretch(1)
+        
         # Search field
-        layout.addStretch(1)  # Add spacer
+        self.search_edit = QLineEdit(self)
+        self.search_edit.setPlaceholderText("Search all content...")
+        self.search_edit.setMinimumWidth(200)
+        self.search_edit.setMaximumWidth(300)
+        self.search_edit.setStyleSheet("""
+            QLineEdit {
+                padding: 5px 10px;
+                border-radius: 4px;
+                border: 1px solid #555;
+                background-color: #2C3E50;
+                color: white;
+                font-size: 11pt;
+            }
+            QLineEdit:focus {
+                border: 1px solid #3498db;
+            }
+        """)
+        layout.addWidget(self.search_edit)
+        
+        # Search button
+        self.search_button = QPushButton("Search", self)
+        self.search_button.setStyleSheet("""
+            QPushButton {
+                padding: 5px 15px;
+                border-radius: 4px;
+                background-color: #3498db;
+                color: white;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:pressed {
+                background-color: #21618c;
+            }
+        """)
+        layout.addWidget(self.search_button)
+        
+        # Clear search button (initially hidden)
+        self.clear_search_button = QPushButton("Clear", self)
+        self.clear_search_button.setStyleSheet("""
+            QPushButton {
+                padding: 5px 15px;
+                border-radius: 4px;
+                background-color: #e74c3c;
+                color: white;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
+        self.clear_search_button.hide()
+        layout.addWidget(self.clear_search_button)
         
         # Connect signals
         self.content_type_group.buttonClicked.connect(self._on_content_type_changed)
+        self.search_button.clicked.connect(self._on_search_clicked)
+        self.clear_search_button.clicked.connect(self._on_clear_search)
+        self.search_edit.returnPressed.connect(self._on_search_clicked)
         
         # Set fixed height to make the bar more compact
-        self.setFixedHeight(35)
+        self.setFixedHeight(45)
         
         # Apply styling
         self.setStyleSheet("""
@@ -92,7 +157,30 @@ class ContentTypeBar(QWidget):
         """Handle content type change"""
         content_type = button.property("content_type")
         if content_type:
+            # Clear search when changing content type
+            self._clear_search_state()
             self.content_type_changed.emit(content_type)
+    
+    def _on_search_clicked(self):
+        """Handle search button click"""
+        search_term = self.search_edit.text().strip()
+        if search_term:
+            # Show clear button
+            self.clear_search_button.show()
+            # Emit search signal
+            self.search_requested.emit(search_term)
+    
+    def _on_clear_search(self):
+        """Handle clear search button click"""
+        self._clear_search_state()
+        # Return to the currently selected content type
+        current_type = self.get_current_content_type()
+        self.content_type_changed.emit(current_type)
+    
+    def _clear_search_state(self):
+        """Clear search UI state"""
+        self.search_edit.clear()
+        self.clear_search_button.hide()
     
     def get_current_content_type(self):
         """Get currently selected content type"""
@@ -100,12 +188,65 @@ class ContentTypeBar(QWidget):
             if button.isChecked():
                 return button.property("content_type")
         return "live"  # Default
+    
+    def set_search_mode(self, search_term):
+        """Set UI to search mode"""
+        self.search_edit.setText(search_term)
+        self.clear_search_button.show()
+
+class ServiceAddDialog(QDialog):
+    """Dialog for adding a new service"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Service")
+        self.setFixedSize(400, 200)
+        
+        # Create layout
+        layout = QVBoxLayout(self)
+        
+        # Service name
+        layout.addWidget(QLabel("Service Name:"))
+        self.service_name_edit = QLineEdit()
+        self.service_name_edit.setPlaceholderText("e.g., My IPTV Service")
+        layout.addWidget(self.service_name_edit)
+        
+        # Service URL
+        layout.addWidget(QLabel("Service URL:"))
+        self.service_url_edit = QLineEdit()
+        self.service_url_edit.setPlaceholderText("e.g., iptv.example.com")
+        layout.addWidget(self.service_url_edit)
+        
+        # Use HTTPS checkbox
+        self.use_https_checkbox = QCheckBox("Use HTTPS")
+        self.use_https_checkbox.setChecked(True)
+        layout.addWidget(self.use_https_checkbox)
+        
+        # Buttons
+        buttons_layout = QHBoxLayout()
+        self.add_button = QPushButton("Add")
+        self.add_button.clicked.connect(self.accept)
+        buttons_layout.addWidget(self.add_button)
+        
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        buttons_layout.addWidget(self.cancel_button)
+        
+        layout.addLayout(buttons_layout)
+    
+    def get_service_data(self):
+        """Get the entered service data"""
+        return {
+            'name': self.service_name_edit.text().strip(),
+            'url': self.service_url_edit.text().strip(),
+            'use_https': self.use_https_checkbox.isChecked()
+        }
 
 class ChumpStreamsMainWindow(QMainWindow):
     """Main window for ChumpStreams application"""
     
     # Signals
-    login_requested = pyqtSignal(str, str, bool)  # username, password, remember
+    login_requested = pyqtSignal(str, str, bool, dict)  # username, password, remember, service
     logout_requested = pyqtSignal()
     category_changed = pyqtSignal(str, str)  # content_type, category_name
     search_requested = pyqtSignal(str)  # search_term
@@ -113,6 +254,7 @@ class ChumpStreamsMainWindow(QMainWindow):
     epg_delete_requested = pyqtSignal()  # Added for Delete EPG
     epg_refresh_requested = pyqtSignal()  # Added for Refresh EPG
     settings_requested = pyqtSignal()    # Added for Settings
+    service_changed = pyqtSignal(dict)  # Service configuration changed
     
     def __init__(self):
         """Initialize main window"""
@@ -125,6 +267,8 @@ class ChumpStreamsMainWindow(QMainWindow):
         # Init state
         self.is_logged_in = False
         self.current_username = ""
+        self.is_search_mode = False
+        self.services = self._load_services()
         
         # Create UI components
         self._create_menu_bar()
@@ -132,6 +276,49 @@ class ChumpStreamsMainWindow(QMainWindow):
         self._create_central_widget()
         self._create_login_dialog()
         
+    def _load_services(self):
+        """Load saved services from configuration"""
+        import json
+        services = []
+        
+        # Always include default ChumpStreams service
+        services.append({
+            'name': 'ChumpStreams',
+            'url': 'subs.chumpbumptv.com',
+            'use_https': True,
+            'is_default': True
+        })
+        
+        # Try to load additional services from config
+        try:
+            config_file = os.path.join(os.path.expanduser("~"), '.chumpstreams', 'services.json')
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    saved_services = json.load(f)
+                    for service in saved_services:
+                        if service['name'] != 'ChumpStreams':  # Don't duplicate default
+                            services.append(service)
+        except Exception as e:
+            print(f"Error loading services: {e}")
+        
+        return services
+    
+    def _save_services(self):
+        """Save services to configuration"""
+        import json
+        try:
+            config_dir = os.path.join(os.path.expanduser("~"), '.chumpstreams')
+            os.makedirs(config_dir, exist_ok=True)
+            config_file = os.path.join(config_dir, 'services.json')
+            
+            # Only save non-default services
+            custom_services = [s for s in self.services if not s.get('is_default', False)]
+            
+            with open(config_file, 'w') as f:
+                json.dump(custom_services, f, indent=2)
+        except Exception as e:
+            print(f"Error saving services: {e}")
+    
     def _create_menu_bar(self):
         """Create menu bar"""
         # Create menu bar
@@ -216,7 +403,7 @@ class ChumpStreamsMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)  # Reduce spacing to move content type bar closer to top
         
-        # Create content type bar
+        # Create content type bar with search
         self.content_type_bar = ContentTypeBar()
         main_layout.addWidget(self.content_type_bar)
         
@@ -257,19 +444,35 @@ class ChumpStreamsMainWindow(QMainWindow):
         
         # Connect signals
         self.content_type_bar.content_type_changed.connect(self._on_content_type_changed)
+        self.content_type_bar.search_requested.connect(self._on_search)
         self.category_panel.category_selected.connect(self._on_category_selected)
-        
-        # Connect play signal from info panel to content panel
-        self.info_panel.content_play_requested.connect(self.content_panel.play_content)
     
     def _create_login_dialog(self):
         """Create login dialog"""
         self.login_dialog = QDialog(self)
         self.login_dialog.setWindowTitle("Login")
-        self.login_dialog.setFixedSize(300, 150)
+        self.login_dialog.setFixedSize(350, 250)
         
         # Layout
         layout = QVBoxLayout(self.login_dialog)
+        
+        # Service selection
+        service_layout = QHBoxLayout()
+        service_layout.addWidget(QLabel("Service:"))
+        
+        self.service_combo = QComboBox()
+        self.service_combo.setMinimumWidth(200)
+        # Populate services
+        for service in self.services:
+            self.service_combo.addItem(service['name'], service)
+        # Add "Add New..." option
+        self.service_combo.addItem("Add New...", None)
+        service_layout.addWidget(self.service_combo)
+        
+        layout.addLayout(service_layout)
+        
+        # Connect service combo change
+        self.service_combo.currentIndexChanged.connect(self._on_service_changed)
         
         # Username
         self.username_edit = QLineEdit()
@@ -283,7 +486,7 @@ class ChumpStreamsMainWindow(QMainWindow):
         layout.addWidget(self.password_edit)
         
         # Remember checkbox
-        self.remember_checkbox = QCheckBox("Remember username")
+        self.remember_checkbox = QCheckBox("Remember login")
         layout.addWidget(self.remember_checkbox)
         
         # Buttons
@@ -298,6 +501,39 @@ class ChumpStreamsMainWindow(QMainWindow):
         buttons_layout.addWidget(self.cancel_button)
         
         layout.addLayout(buttons_layout)
+    
+    def _on_service_changed(self, index):
+        """Handle service selection change"""
+        if index < 0:
+            return
+            
+        service_data = self.service_combo.itemData(index)
+        
+        if service_data is None:  # "Add New..." selected
+            # Show add service dialog
+            dialog = ServiceAddDialog(self)
+            if dialog.exec_() == QDialog.Accepted:
+                new_service = dialog.get_service_data()
+                if new_service['name'] and new_service['url']:
+                    # Add to services list
+                    self.services.append(new_service)
+                    self._save_services()
+                    
+                    # Add to combo box (insert before "Add New...")
+                    self.service_combo.insertItem(
+                        self.service_combo.count() - 1,
+                        new_service['name'],
+                        new_service
+                    )
+                    
+                    # Select the new service
+                    self.service_combo.setCurrentIndex(self.service_combo.count() - 2)
+                else:
+                    # Reset to first service
+                    self.service_combo.setCurrentIndex(0)
+            else:
+                # Reset to first service
+                self.service_combo.setCurrentIndex(0)
     
     def _show_login_dialog(self):
         """Show login dialog"""
@@ -321,14 +557,23 @@ class ChumpStreamsMainWindow(QMainWindow):
             self.show_error_message("Login", "Please enter username and password")
             return
         
-        # Emit login signal
-        self.login_requested.emit(username, password, remember)
+        # Get selected service
+        service_index = self.service_combo.currentIndex()
+        service_data = self.service_combo.itemData(service_index)
+        
+        if not service_data:
+            self.show_error_message("Login", "Please select a valid service")
+            return
+        
+        # Emit login signal with service data
+        self.login_requested.emit(username, password, remember, service_data)
         
         # Close dialog
         self.login_dialog.accept()
     
     def _on_content_type_changed(self, content_type):
         """Handle content type change"""
+        self.is_search_mode = False
         self.category_changed.emit(content_type, "")
     
     def _on_category_selected(self, category_name):
@@ -336,13 +581,18 @@ class ChumpStreamsMainWindow(QMainWindow):
         content_type = self.content_type_bar.get_current_content_type()
         self.category_changed.emit(content_type, category_name)
     
-    # Search method kept but not connected to UI elements
     def _on_search(self, search_term):
         """Handle search"""
         if not search_term:
             self.show_error_message("Search", "Please enter a search term")
             return
         
+        self.is_search_mode = True
+        # Clear categories when searching
+        self.category_panel.set_categories([])
+        # Show searching status
+        self.show_status_message(f"Searching for '{search_term}'...")
+        # Emit search signal
         self.search_requested.emit(search_term)
     
     def _show_about_dialog(self):
@@ -350,8 +600,9 @@ class ChumpStreamsMainWindow(QMainWindow):
         QMessageBox.about(
             self, 
             "About ChumpStreams",
-            "ChumpStreams 2.0.3\n\n"
+            "ChumpStreams 2.0.6\n\n"
             "A clean, modern interface for IPTV streaming.\n\n"
+            "Now with multi-service support!\n\n"
             "© 2025 covchump"
         )
     
@@ -384,11 +635,26 @@ class ChumpStreamsMainWindow(QMainWindow):
         
         # Update login status in status bar
         self.login_status_label.setText("Not logged in")
+        
+        # Clear search
+        self.content_type_bar._clear_search_state()
     
-    def set_login_credentials(self, username, remember=False):
+    def set_login_credentials(self, username, remember=False, service_name=None):
         """Set login credentials"""
         self.username_edit.setText(username)
         self.remember_checkbox.setChecked(remember)
+        
+        # Set service if specified
+        if service_name:
+            for i in range(self.service_combo.count()):
+                if self.service_combo.itemText(i) == service_name:
+                    self.service_combo.setCurrentIndex(i)
+                    break
+    
+    def get_current_service(self):
+        """Get currently selected service"""
+        index = self.service_combo.currentIndex()
+        return self.service_combo.itemData(index)
     
     def show_status_message(self, message):
         """Show message in status bar"""
