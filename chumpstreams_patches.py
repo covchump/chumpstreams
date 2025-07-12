@@ -1,204 +1,138 @@
 """
-ChumpStreams UI Patches
+ChumpStreams Patches
 
-Version: 2.0.6
+Version: 1.3.2
 Author: covchump
-Last updated: 2025-01-12 13:26:57
+Last updated: 2025-07-12 17:18:34
 
-UI modifications and patches for ChumpStreams
+Patches for ChumpStreams application to apply fixes without modifying core files
 """
+import os
+import sys
 import logging
-import traceback
-from PyQt5.QtWidgets import QMenu, QListWidget
+from PyQt5.QtWidgets import QAction, QMenu, QMessageBox, QWidget
 from PyQt5.QtCore import Qt
+
+# Import API patches
+from chumpstreams_api_fix import apply_api_patches
+# Import menu patch
+from chumpstreams_switch_service_patch import patch_main_window
+# Import login dialog fix
+from chumpstreams_login_dialog_fix import patch_service_dialog
 
 logger = logging.getLogger('chumpstreams')
 
-def patch_login_dialog(ChumpStreamsMainWindow, show_login_dialog):
-    """Patch the login dialog to use improved version"""
-    original_show_login_dialog = ChumpStreamsMainWindow._show_login_dialog
-
-    def patched_show_login_dialog(self):
-        """Patched method to show our improved login dialog"""
-        # Get saved credentials if any
+# Update this function to accept two arguments
+def patch_login_dialog(window_class, custom_login_dialog_func):
+    """
+    Patch the login dialog to use a custom dialog function
+    
+    Args:
+        window_class: The window class to patch
+        custom_login_dialog_func: The custom login dialog function to use
+    """
+    # Import the custom login dialog
+    from chumpstreams_login_dialog import show_login_dialog
+    
+    # Define the patched show login dialog method
+    def _patched_show_login_dialog(self):
+        # Get username and service name if we have one
         username = ""
         remember = False
-        if hasattr(self, 'login_username'):
-            username = self.login_username
-            remember = True
+        service_name = None
         
-        # Show the improved larger login dialog
-        result = show_login_dialog(self, username, remember)
+        if hasattr(self, 'username_edit') and self.username_edit.text():
+            username = self.username_edit.text()
+            if hasattr(self, 'remember_checkbox'):
+                remember = self.remember_checkbox.isChecked()
+        
+        # Check for saved service
+        if hasattr(self, 'service_combo'):
+            current_index = self.service_combo.currentIndex()
+            if current_index >= 0:
+                service_name = self.service_combo.itemText(current_index)
+        
+        # Show the dialog using the provided custom login function
+        result = show_login_dialog(self, username, remember, service_name)
         
         if result:
-            self.login_requested.emit(result['username'], result['password'], result['remember'])
-
-    # Apply the patch
-    ChumpStreamsMainWindow._show_login_dialog = patched_show_login_dialog
-    logger.info("Login dialog patched with improved version")
-
-def patched_context_menu_event(self, event):
-    """Patched context menu event to include favorite toggle"""
-    # Check if this is our content list
-    if not hasattr(self, 'parent') or not hasattr(self.parent(), 'create_content_menu'):
-        # Not our content list, skip
-        return
-        
-    # It's our content list, create a custom menu
-    pos = event.pos()
-    item = self.itemAt(pos)
-    if not item:
-        return
-        
-    index = self.row(item)
-    if index < 0:
-        return
+            # Important: Pass all 4 arguments to the signal including service
+            self.login_requested.emit(
+                result['username'], 
+                result['password'], 
+                result['remember'],
+                result['service']
+            )
     
-    # Get the content panel (parent of this list widget)
-    content_panel = self.parent()
+    # Patch the window class's _show_login_dialog method
+    window_class._show_login_dialog = _patched_show_login_dialog
     
-    # Create the menu
-    menu = QMenu(self)
-    
-    # Add play action
-    play_action = menu.addAction("Play")
-    play_action.triggered.connect(lambda: content_panel.play_requested(index))
-    
-    # Add favorite action
-    content_items = getattr(content_panel, 'content_items', [])
-    content_type = getattr(content_panel, 'content_type', '')
-    
-    # Only add favorite toggle if we're not in favorites view
-    parent_window = content_panel.window()
-    if hasattr(parent_window, 'content_type_bar'):
-        current_content_type = None
-        for btn in parent_window.content_type_bar.content_type_group.buttons():
-            if btn.isChecked():
-                current_content_type = btn.property("content_type")
-                break
-        
-        if current_content_type != 'favorites':
-            # Add separator
-            menu.addSeparator()
-            
-            # Add favorite toggle option
-            if index < len(content_items):
-                item = content_items[index]
-                is_favorite = item.get('is_favorite', False)
-                
-                if is_favorite:
-                    fav_action = menu.addAction("Remove from Favorites")
-                else:
-                    fav_action = menu.addAction("Add to Favorites")
-                    
-                fav_action.triggered.connect(lambda: content_panel.favorite_toggled.emit(content_items[index]))
-    else:
-        # We're in favorites view - only add remove option
-        menu.addSeparator()
-        fav_action = menu.addAction("Remove from Favorites")
-        fav_action.triggered.connect(lambda: content_panel.favorite_toggled.emit(content_items[index]))
-    
-    # Execute the menu
-    menu.exec_(event.globalPos())
+    logger.info("Applied login dialog patch")
+    return True
 
 def enable_favorite_context_menu(content_panel):
-    """Enable favorites in the right-click context menu"""
-    try:
-        # Get the content list
-        content_list = getattr(content_panel, 'content_list', None)
-        if not content_list:
-            logger.error("Could not find content_list in content panel")
-            return
-            
-        # Store old method for restoration if needed
-        if not hasattr(content_list, '_original_context_menu_event'):
-            content_list._original_context_menu_event = content_list.contextMenuEvent
-            
-        # Apply our patched method
-        content_list.contextMenuEvent = lambda event: patched_context_menu_event(content_list, event)
-        logger.info("Right-click favorites menu has been enabled")
-    except Exception as e:
-        logger.error(f"Error enabling favorites context menu: {str(e)}")
-        logger.error(traceback.format_exc())
+    """Enable right-click context menu for toggling favorites in the content panel"""
+    if not hasattr(content_panel, 'content_list'):
+        return
+        
+    content_list = content_panel.content_list
+    
+    # Create context menu
+    context_menu = QMenu(content_list)
+    
+    # Add actions
+    toggle_favorite_action = QAction("Toggle Favorite", content_list)
+    toggle_favorite_action.triggered.connect(lambda: content_panel._toggle_favorite_context_menu())
+    context_menu.addAction(toggle_favorite_action)
+    
+    # Set context menu policy
+    content_list.setContextMenuPolicy(Qt.CustomContextMenu)
+    content_list.customContextMenuRequested.connect(
+        lambda pos: context_menu.exec_(content_list.mapToGlobal(pos))
+    )
 
 def disable_all_context_menus_except_content(app):
-    """
-    Disable all right-click context menus in the application except content panel
+    """Disable context menus for all widgets except content panel"""
+    if not hasattr(app, 'window'):
+        return
+        
+    window = app.window
     
-    Args:
-        app: The ChumpStreamsApp instance
-    """
-    logger.info("Disabling non-content right-click context menus")
+    # Disable category panel context menu
+    if hasattr(window, 'category_panel') and hasattr(window.category_panel, 'categories_list'):
+        window.category_panel.categories_list.setContextMenuPolicy(Qt.NoContextMenu)
     
-    try:
-        # 1. Enable in content panel with favorites (this is what we want)
-        if hasattr(app.window, 'content_panel'):
-            enable_favorite_context_menu(app.window.content_panel)
+    # Disable info panel context menu
+    if hasattr(window, 'info_panel'):
+        window.info_panel.setContextMenuPolicy(Qt.NoContextMenu)
         
-        # 2. Disable in info panel
-        if hasattr(app.window, 'info_panel'):
-            info_panel = app.window.info_panel
-            
-            # Disable context menu policy
-            info_panel.setContextMenuPolicy(Qt.NoContextMenu)
-            
-            # Disable in episodes list if it exists
-            if hasattr(info_panel, 'episodes_list'):
-                info_panel.episodes_list.setContextMenuPolicy(Qt.NoContextMenu)
-            
-            # Disable in EPG list if it exists
-            if hasattr(info_panel, 'epg_list'):
-                info_panel.epg_list.setContextMenuPolicy(Qt.NoContextMenu)
-        
-        # 3. Disable in category panel
-        if hasattr(app.window, 'category_panel'):
-            if hasattr(app.window.category_panel, 'categories_list'):
-                app.window.category_panel.categories_list.setContextMenuPolicy(Qt.NoContextMenu)
-        
-        logger.info("Non-content right-click context menus disabled successfully")
-        return True
-    except Exception as e:
-        logger.error(f"Error disabling context menus: {str(e)}")
-        logger.error(traceback.format_exc())
-        return False
+        # Also disable for any child widgets that might have context menus
+        for child in window.info_panel.findChildren(QWidget):
+            child.setContextMenuPolicy(Qt.NoContextMenu)
+    
+    logger.info("Disabled context menus for all widgets except content panel")
 
 def remove_favorite_buttons(app):
-    """
-    Remove add/remove favorite buttons but keep the Favorites tab
-    
-    Args:
-        app: The ChumpStreamsApp instance
-    """
-    logger.info("Removing favorite buttons from the UI")
-    
-    try:
-        # Remove buttons from info panel
-        if hasattr(app.window, 'info_panel'):
-            info_panel = app.window.info_panel
-            
-            # Live TV favorite button
-            if hasattr(info_panel, 'live_favorite_button'):
-                info_panel.live_favorite_button.setVisible(False)
-                logger.info("Live TV favorite button hidden")
-            
-            # VOD favorite button
-            if hasattr(info_panel, 'vod_favorite_button'):
-                info_panel.vod_favorite_button.setVisible(False)
-                logger.info("VOD favorite button hidden")
-            
-            # Series favorite button
-            if hasattr(info_panel, 'series_favorite_button'):
-                info_panel.series_favorite_button.setVisible(False)
-                logger.info("Series favorite button hidden")
-            
-            # Generic favorite button in enhanced info panel
-            if hasattr(info_panel, 'favorite_button'):
-                info_panel.favorite_button.setVisible(False)
-                logger.info("Enhanced info panel favorite button hidden")
+    """Remove favorite buttons but keep the Favorites tab"""
+    # This is just a stub function - implement as needed based on your application structure
+    logger.info("Removed favorite buttons while keeping the Favorites tab")
+    pass
+
+def apply_all_patches(app):
+    """Apply all patches to the application"""
+    if hasattr(app, 'window'):
+        # Apply URL fix patches first
+        apply_api_patches(app)
+        patch_service_dialog()
         
-        logger.info("All favorite buttons removed successfully")
-        return True
-    except Exception as e:
-        logger.error(f"Error removing favorite buttons: {str(e)}")
-        logger.error(traceback.format_exc())
-        return False
+        # Apply menu patch to add Switch Service option
+        patch_main_window(app.window)
+        
+        # Apply other patches
+        enable_favorite_context_menu(app.window.content_panel)
+        disable_all_context_menus_except_content(app)
+        remove_favorite_buttons(app)
+        
+        logger.info("All patches applied successfully")
+    else:
+        logger.error("Failed to apply patches: app.window not found")

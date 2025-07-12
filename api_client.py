@@ -1,9 +1,9 @@
 """
 ChumpStreams API Client
 
-Version: 1.9.5
+Version: 1.9.6
 Author: covchump
-Last updated: 2025-01-12 14:22:00
+Last updated: 2025-07-12 18:59:00
 
 Client for interacting with IPTV service APIs
 """
@@ -22,10 +22,31 @@ class ApiClient:
     
     def __init__(self, base_url, use_https=True, username='', password=''):
         """Initialize API client"""
-        protocol = 'https' if use_https else 'http'
-        # Add port 80 explicitly for HTTP connections
-        port = '443' if use_https else '80'
-        self.base_url = f"{protocol}://{base_url}:{port}"
+        # First, fix any double protocols in the base URL
+        if base_url.startswith('https://http://'):
+            base_url = base_url.replace('https://', '', 1)
+            use_https = False  # Force HTTP since the URL already specifies it
+        elif base_url.startswith('http://https://'):
+            base_url = base_url.replace('http://', '', 1)
+            use_https = True  # Force HTTPS since the URL already specifies it
+        
+        # Check if base_url already has a protocol
+        if base_url.startswith('http://') or base_url.startswith('https://'):
+            # Keep existing protocol
+            self.base_url = base_url
+            
+            # Add port if not already specified
+            if not any(f":{port}" in self.base_url for port in ['80', '443', '8080']):
+                if base_url.startswith('https://'):
+                    self.base_url += ':443'
+                else:
+                    self.base_url += ':80'
+        else:
+            # No protocol in URL, add it
+            protocol = 'https' if use_https else 'http'
+            port = '443' if use_https else '80'
+            self.base_url = f"{protocol}://{base_url}:{port}"
+        
         self.username = username
         self.password = password
         self.token = None
@@ -33,6 +54,33 @@ class ApiClient:
         self.logged_in = False
         self.last_request_time = 0
         self.request_delay = 0.5  # Delay between requests in seconds
+    
+    def set_base_url(self, url, use_https=True):
+        """Set the base URL safely without adding duplicate protocols"""
+        # First, fix any double protocols in the URL
+        if url.startswith('https://http://'):
+            url = url.replace('https://', '', 1)
+            use_https = False  # Force HTTP since the URL already specifies it
+        elif url.startswith('http://https://'):
+            url = url.replace('http://', '', 1)
+            use_https = True  # Force HTTPS since the URL already specifies it
+        
+        # Now set the base URL using the fixed URL
+        if url.startswith('http://') or url.startswith('https://'):
+            # Keep existing protocol
+            self.base_url = url
+            
+            # Add port if not already specified
+            if not any(f":{port}" in self.base_url for port in ['80', '443', '8080']):
+                if url.startswith('https://'):
+                    self.base_url += ':443'
+                else:
+                    self.base_url += ':80'
+        else:
+            # No protocol in URL, add it
+            protocol = 'https' if use_https else 'http'
+            port = '443' if use_https else '80'
+            self.base_url = f"{protocol}://{url}:{port}"
     
     def login(self, username=None, password=None):
         """Login to the IPTV service"""
